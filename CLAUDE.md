@@ -24,6 +24,12 @@ git ls-files | head -50 | python scripts/check_windows_paths.py
 ```
 Validates paths against Windows filesystem limitations (invalid chars, reserved names, path length >240, case collisions). Exits 0 if clean, 1 if issues found.
 
+### Windows Path Issue Counter
+```
+python scripts/count_windows_path_issues.py
+```
+Scans the entire repo via `git ls-files` and prints a compact summary of issue counts by type (e.g. `path-too-long : 3632`). No per-file detail — only `issue : count` lines for types with at least one hit.
+
 ## Key Constraints
 
 - Pull requests are not accepted; changes should be proposed via GitHub issues
