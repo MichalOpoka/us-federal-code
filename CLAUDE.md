@@ -24,6 +24,19 @@ git ls-files | head -50 | python scripts/check_windows_paths.py
 ```
 Validates paths against Windows filesystem limitations (invalid chars, reserved names, path length >240, case collisions). Exits 0 if clean, 1 if issues found.
 
+### Windows Path Fixer
+```
+# Dry-run on specific paths (shows planned renames)
+python scripts/fix_windows_paths.py "usc/title-18-crimes-and-criminal-procedure/..."
+
+# Dry-run on entire repo
+python scripts/fix_windows_paths.py --all
+
+# Apply renames using git mv
+python scripts/fix_windows_paths.py --all --apply
+```
+Fixes Windows-incompatible paths by shortening directory names (strips descriptive suffixes, keeping only type prefix + identifier, e.g. `chapter-401-general-provisions` → `chapter-401`) and decoding HTML entities. Dry-run by default; use `--apply` to execute via `git mv`.
+
 ### Windows Path Issue Counter
 ```
 python scripts/count_windows_path_issues.py
