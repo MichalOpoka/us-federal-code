@@ -136,54 +136,40 @@ def compute_renames_for_path(path):
     return renames
 
 
-def collect_directories(root):
-    """Walk the directory tree and collect all directory paths relative to cwd."""
-    dirs = []
-    for dirpath, dirnames, _filenames in os.walk(root):
-        for d in dirnames:
-            dirs.append(os.path.join(dirpath, d))
-    return dirs
+def compute_all_renames(root, apply=False):
+    """Compute (and optionally apply) all renames needed under root.
 
-
-def compute_all_renames(root):
-    """Compute all renames needed for the entire tree under root.
-
-    Processes top-down by depth. Each directory that needs renaming gets an
-    entry. Parent renames are tracked so child paths use the correct
-    (already-renamed) parent path.
+    Uses os.walk top-down. In apply mode, renames are executed immediately
+    via git mv, and dirnames is updated so os.walk descends into renamed dirs.
+    In dry-run mode, a path_xlat map tracks planned parent renames for display.
     """
-    all_dirs = collect_directories(root)
-    # Sort by depth (shallowest first) for top-down processing
-    all_dirs.sort(key=lambda p: p.count('/'))
+    renames = []
+    # In dry-run mode, maps actual filesystem dirpath -> display dirpath
+    display_map = {root: root}
 
-    renames = []  # (old_path, new_path) — old_path is the path AFTER parent renames
-    # Maps original path prefixes to their renamed versions
-    prefix_map = {}  # original_path -> renamed_path
+    for dirpath, dirnames, _filenames in os.walk(root, topdown=True):
+        display_dirpath = display_map.get(dirpath, dirpath) if not apply else dirpath
 
-    for d in all_dirs:
-        name = os.path.basename(d)
-        new_name = fix_component(name)
+        new_dirnames = []
+        for d in dirnames:
+            new_name = fix_component(d)
+            actual_full = os.path.join(dirpath, d)
+            if new_name != d:
+                old_path = os.path.join(display_dirpath, d)
+                new_path = os.path.join(display_dirpath, new_name)
+                renames.append((old_path, new_path))
+                if apply:
+                    apply_rename(actual_full, os.path.join(dirpath, new_name))
+                else:
+                    display_map[actual_full] = new_path
+            else:
+                if not apply:
+                    display_map[actual_full] = os.path.join(display_dirpath, d)
+            new_dirnames.append(new_name if apply else d)
 
-        # Compute the actual current path of the parent (after prior renames)
-        parent_dir = os.path.dirname(d)
-        actual_parent = parent_dir
-        # Find the longest matching prefix that was renamed
-        best_match = ''
-        for orig, renamed in prefix_map.items():
-            if (parent_dir == orig or parent_dir.startswith(orig + '/')) and len(orig) > len(best_match):
-                best_match = orig
-        if best_match:
-            actual_parent = prefix_map[best_match] + parent_dir[len(best_match):]
-
-        if new_name != name:
-            old_path = os.path.join(actual_parent, name)
-            new_path = os.path.join(actual_parent, new_name)
-            renames.append((old_path, new_path))
-            # Track this rename so children use the new path
-            prefix_map[d] = os.path.join(actual_parent, new_name)
-        elif best_match:
-            # Parent was renamed but this dir wasn't — still track for children
-            prefix_map[d] = os.path.join(actual_parent, name)
+        if apply:
+            dirnames[:] = new_dirnames
+        # In dry-run, leave dirnames unchanged so os.walk can descend
 
     return renames
 
@@ -279,8 +265,27 @@ def main():
             print(f"Error: '{root}' directory not found.", file=sys.stderr)
             sys.exit(1)
 
+        if args.apply:
+            # Pre-scan for collisions before applying
+            print(f"Scanning {root}/ for collisions...", file=sys.stderr)
+            dry_renames = compute_all_renames(root, apply=False)
+            collisions = check_collisions(dry_renames)
+            if collisions:
+                print(f"\n{red}{bold}Collision detected! These directories would have the same name:{reset}")
+                for path1, path2, name in collisions:
+                    print(f"  {path1}")
+                    print(f"  {path2}")
+                    print(f"  -> both shorten to: {name}")
+                print(f"\n{red}Aborting — resolve collisions first.{reset}")
+                sys.exit(1)
+
+            print(f"Applying renames...", file=sys.stderr)
+            all_renames = compute_all_renames(root, apply=True)
+            print(f"\n{green}{len(all_renames)} directories renamed successfully.{reset}")
+            return
+
         print(f"Scanning {root}/ ...", file=sys.stderr)
-        all_renames = compute_all_renames(root)
+        all_renames = compute_all_renames(root, apply=False)
 
         if not all_renames:
             print(f"{green}No renames needed — all paths are already short.{reset}")
@@ -294,9 +299,6 @@ def main():
             print(f"  {path1}")
             print(f"  {path2}")
             print(f"  -> both shorten to: {name}")
-        if args.apply:
-            print(f"\n{red}Aborting — resolve collisions first.{reset}")
-            sys.exit(1)
 
     # Display renames
     for old_path, new_path in all_renames:
@@ -309,25 +311,7 @@ def main():
             print(f"  {yellow}{old_name}{reset} -> {green}{new_name}{reset}")
 
     print(f"\n{bold}{len(all_renames)} director{'y' if len(all_renames) == 1 else 'ies'} to rename{reset}")
-
-    if not args.apply:
-        print(f"\n{yellow}Dry run — no changes made. Use --apply to execute renames.{reset}")
-        return
-
-    # Apply renames
-    print(f"\nApplying renames...")
-    success = 0
-    failed = 0
-    for old_path, new_path in all_renames:
-        if apply_rename(old_path, new_path):
-            success += 1
-        else:
-            failed += 1
-
-    print(f"\n{green}{success} renamed successfully.{reset}")
-    if failed:
-        print(f"{red}{failed} failed.{reset}")
-        sys.exit(1)
+    print(f"\n{yellow}Dry run — no changes made. Use --apply to execute renames.{reset}")
 
 
 if __name__ == "__main__":
